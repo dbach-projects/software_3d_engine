@@ -1,0 +1,792 @@
+import 'dart:async';
+import 'dart:math';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+class Vector4 {
+  Vector4({this.x = 0, this.y = 0, this.z = 0, this.w = 1});
+
+  double x;
+  double y;
+  double z;
+  double w;
+
+  void copyVectorData(Vector4 v) {
+    x = v.x;
+    y = v.y;
+    z = v.z;
+    w = v.w;
+  }
+
+  static Vector4 addVector4(Vector4 v1, Vector4 v2) {
+    return Vector4(x: v1.x + v2.x, y: v1.y + v2.y, z: v1.z + v2.z);
+  }
+
+  static Vector4 subVector4(Vector4 v1, Vector4 v2) {
+    return Vector4(x: v1.x - v2.x, y: v1.y - v2.y, z: v1.z - v2.z);
+  }
+
+  static Vector4 multVector4(Vector4 v1, double k) {
+    return Vector4(x: v1.x * k, y: v1.y * k, z: v1.z * k);
+  }
+
+  static Vector4 divVector4(Vector4 v1, double k) {
+    return Vector4(x: v1.x / k, y: v1.y / k, z: v1.z / k);
+  }
+
+  static double dotProduct(Vector4 v1, Vector4 v2) {
+    return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
+  }
+
+  static double lengthVector4(Vector4 v1) {
+    return sqrt(dotProduct(v1, v1));
+  }
+
+  static Vector4 normalizeVector4(Vector4 v1) {
+    double l = lengthVector4(v1);
+    return divVector4(v1, l);
+  }
+
+  static Vector4 crossProductVector4(Vector4 v1, Vector4 v2) {
+    Vector4 v = Vector4();
+    v.x = v1.y * v2.z - v1.z * v2.y;
+    v.y = v1.z * v2.x - v1.x * v2.z;
+    v.z = v1.x * v2.y - v1.y * v2.x;
+    return v;
+  }
+
+  static Vector4 multiplyMatrixVector(Matrix m, Vector4 i) {
+    Vector4 v = Vector4();
+    v.x = i.x * m.matrix[0][0] +
+        i.y * m.matrix[1][0] +
+        i.z * m.matrix[2][0] +
+        i.w * m.matrix[3][0];
+    v.y = i.x * m.matrix[0][1] +
+        i.y * m.matrix[1][1] +
+        i.z * m.matrix[2][1] +
+        i.w * m.matrix[3][1];
+    v.z = i.x * m.matrix[0][2] +
+        i.y * m.matrix[1][2] +
+        i.z * m.matrix[2][2] +
+        i.w * m.matrix[3][2];
+    v.w = i.x * m.matrix[0][3] +
+        i.y * m.matrix[1][3] +
+        i.z * m.matrix[2][3] +
+        i.w * m.matrix[3][3];
+
+    return v;
+  }
+}
+
+class Triangle {
+  Triangle({required this.points});
+
+  List<Vector4> points = List<Vector4>.filled(3, Vector4(), growable: false);
+  late HSLColor color = const HSLColor.fromAHSL(1, 250, 1, 0.5);
+
+  void computeShading(double lightness) {
+    color =
+        HSLColor.fromAHSL(color.alpha, color.hue, color.saturation, lightness);
+  }
+
+  Vector4 intersectPlane(
+      Vector4 plane1, Vector4 plane2, Vector4 lineStart, Vector4 lineEnd) {
+    plane2 = Vector4.normalizeVector4(plane2);
+    double planed = -Vector4.dotProduct(plane2, plane1);
+    double ad = Vector4.dotProduct(lineStart, plane2);
+    double bd = Vector4.dotProduct(lineEnd, plane2);
+    double t = (-planed - ad) / (bd - ad);
+    Vector4 lineStartToEnd = Vector4.subVector4(lineEnd, lineStart);
+    Vector4 lineToIntersect = Vector4.multVector4(lineStartToEnd, t);
+    return Vector4.addVector4(lineStart, lineToIntersect);
+  }
+
+  Map<String, dynamic> triClipAgainstPlane(
+      Vector4 plane1, Vector4 plane2, Triangle inTri) {
+    Triangle outTri1 = Triangle(points: [Vector4(), Vector4(), Vector4()]);
+    Triangle outTri2 = Triangle(points: [Vector4(), Vector4(), Vector4()]);
+    Map<String, dynamic> result = {'count': 0, 't1': outTri1, 't2': outTri2};
+
+    //make sure plane normal is indeed normal
+    plane2 = Vector4.normalizeVector4(plane2);
+
+    //helper function to calc distance
+    double dist(Vector4 p) {
+      return (plane2.x * p.x +
+          plane2.y * p.y +
+          plane2.z * p.z -
+          Vector4.dotProduct(plane2, plane1));
+    }
+
+    //Create two temp storage arrays to classify points either side of plane
+    //If distance sign is positive, point lies "inside" of plane
+    List<Vector4> insidePoints = [];
+    List<Vector4> outsidePoints = [];
+    int insidePointCount = 0;
+    int outsidePointCount = 0;
+
+    //Get signed distance of each point in triangle to plane
+    double d0 = dist(inTri.points[0]);
+    double d1 = dist(inTri.points[1]);
+    double d2 = dist(inTri.points[2]);
+
+    if (d0 >= 0) {
+      insidePoints.add(inTri.points[0]);
+      insidePointCount++;
+    } else {
+      outsidePoints.add(inTri.points[0]);
+      outsidePointCount++;
+    }
+    if (d1 >= 0) {
+      insidePoints.add(inTri.points[1]);
+      insidePointCount++;
+    } else {
+      outsidePoints.add(inTri.points[1]);
+      outsidePointCount++;
+    }
+    if (d2 >= 0) {
+      insidePoints.add(inTri.points[2]);
+      insidePointCount++;
+    } else {
+      outsidePoints.add(inTri.points[2]);
+      outsidePointCount++;
+    }
+
+    //classify triangle points, and break the input triangle into
+    //smaller output triangles if required. There are four possible
+    //outcomes...
+    if (insidePointCount == 0) {
+      //all points lie on the outside of plane, so clip whole triangle
+      //it ceases to exist
+      return result;
+    }
+    if (insidePointCount == 3) {
+      //all points lie on the inside of plane, so do nothing
+      //and allow the triangle to pass through
+      result['t1'] = inTri;
+      result['count'] = 1;
+      return result;
+    }
+    if (insidePointCount == 1 && outsidePointCount == 2) {
+      //triangle should be clipped. As two points lie outside
+      //the plane.
+
+      // the inside point is valid so keep it
+      // but the two new points are at the locations where the
+      // original sides of the triangle (lines) intersect with the plane
+      Triangle tri = Triangle(points: [
+        insidePoints[0],
+        intersectPlane(plane1, plane2, insidePoints[0], outsidePoints[0]),
+        intersectPlane(plane1, plane2, insidePoints[0], outsidePoints[1])
+      ]);
+      tri.color = const HSLColor.fromAHSL(1, 0, 1, .5);
+
+      result['t1'] = tri;
+      result['count'] = 1;
+      return result;
+    }
+
+    if (insidePointCount == 2 && outsidePointCount == 1) {
+      //triangle should be clipped. As two points lie inside
+      //the plane, the triangle becomes subdevided
+
+      //the first triangle consists of the two inside points and a new
+      //point determined dby the location where one side of the triangle
+      //intersects with the plane
+      Triangle tri1 = Triangle(points: [
+        insidePoints[0],
+        insidePoints[1],
+        intersectPlane(plane1, plane2, insidePoints[0], outsidePoints[0])
+      ]);
+      tri1.color = const HSLColor.fromAHSL(1, 100, 1, .5);
+
+      //the second triangle is composed of one of the inside points,
+      //a new point determined by the intersection of the other side of the
+      //triangle and the plane, and the newly created point above.
+      Triangle tri2 = Triangle(points: [
+        insidePoints[1],
+        tri1.points[2],
+        intersectPlane(plane1, plane2, insidePoints[1], outsidePoints[0])
+      ]);
+      tri2.color = const HSLColor.fromAHSL(1, 100, 1, .5);
+
+      result['t1'] = tri1;
+      result['t2'] = tri2;
+      result['count'] = 2;
+      return result;
+    }
+    return result;
+  }
+}
+
+class Mesh {
+  Mesh();
+
+  List<Triangle> tris = [
+    Triangle(points: [Vector4(), Vector4(), Vector4()])
+  ];
+
+  Future<bool> loadFromFileObj(String filename) async {
+    tris.clear();
+    try {
+      //read in file
+      final file = await rootBundle.loadString('assets/obj_files/$filename');
+      List<String> lines = file.split('\n');
+
+      List<Vector4> vPool = [];
+
+      for (var line in lines) {
+        Vector4 v = Vector4();
+
+        //construct vectors
+        if (line[0] == 'v') {
+          List<String> words = line.split(' ');
+
+          v.x = double.parse(words[1]);
+          v.y = double.parse(words[2]);
+          v.z = double.parse(words[3]);
+
+          vPool.add(v);
+        }
+
+        //construct triangles
+        if (line[0] == 'f') {
+          List<String> words = line.split(' ');
+
+          Triangle tri = Triangle(points: [
+            vPool[int.parse(words[1]) - 1],
+            vPool[int.parse(words[2]) - 1],
+            vPool[int.parse(words[3]) - 1],
+          ]);
+
+          tris.add(tri);
+        }
+      }
+
+      return true;
+    } catch (e) {
+      // print('error $e');
+      return false;
+    }
+  }
+}
+
+class Matrix {
+  Matrix();
+
+  List<List<double>> matrix =
+      List.generate(4, (_) => List.filled(4, 0.0), growable: false);
+
+  void makeIdentity() {
+    matrix[0][0] = 1.0;
+    matrix[1][1] = 1.0;
+    matrix[2][2] = 1.0;
+    matrix[3][3] = 1.0;
+  }
+
+  void resetMatrix() {
+    matrix = List.generate(4, (_) => List.filled(4, 0.0), growable: false);
+  }
+
+  void makeRotationMatrixX(double angleRad) {
+    matrix[0][0] = 1.0;
+    matrix[1][1] = cos(angleRad);
+    matrix[1][2] = sin(angleRad);
+    matrix[2][1] = -sin(angleRad);
+    matrix[2][2] = cos(angleRad);
+    matrix[3][3] = 1.0;
+  }
+
+  void makeRotationMatrixY(double angleRad) {
+    matrix[0][0] = cos(angleRad);
+    matrix[0][2] = sin(angleRad);
+    matrix[2][0] = -sin(angleRad);
+    matrix[1][1] = 1.0;
+    matrix[2][2] = cos(angleRad);
+    matrix[3][3] = 1.0;
+  }
+
+  void makeRotationMatrixZ(double angleRad) {
+    matrix[0][0] = cos(angleRad);
+    matrix[0][1] = sin(angleRad);
+    matrix[1][0] = -sin(angleRad);
+    matrix[1][1] = cos(angleRad);
+    matrix[2][2] = 1.0;
+    matrix[3][3] = 1.0;
+  }
+
+  void makeTranslationMatrix(double x, double y, double z) {
+    matrix[0][0] = 1.0;
+    matrix[1][1] = 1.0;
+    matrix[2][2] = 1.0;
+    matrix[3][3] = 1.0;
+    matrix[3][0] = x;
+    matrix[3][1] = y;
+    matrix[3][2] = z;
+  }
+
+  void multiplyMatrix(Matrix m1, Matrix m2) {
+    for (int c = 0; c < 4; c++) {
+      for (int r = 0; r < 4; r++) {
+        matrix[r][c] = m1.matrix[r][0] * m2.matrix[0][c] +
+            m1.matrix[r][1] * m2.matrix[1][c] +
+            m1.matrix[r][2] * m2.matrix[2][c] +
+            m1.matrix[r][3] * m2.matrix[3][c];
+      }
+    }
+  }
+
+  void makeProjectionMatrix(
+      double fovDegrees, double aspectRatio, double near, double far) {
+    double fFovRad = 1.0 / tan(fovDegrees * 0.5 / 180.0 * 3.14159);
+    matrix[0][0] = aspectRatio * fFovRad;
+    matrix[1][1] = fFovRad;
+    matrix[2][2] = far / (far - near);
+    matrix[3][2] = (-far * near) / (far - near);
+    matrix[2][3] = -1.0;
+    matrix[3][3] = 0.0;
+  }
+
+  void applyMatrixValues(Matrix m) {
+    for (int c = 0; c < 4; c++) {
+      for (int r = 0; r < 4; r++) {
+        matrix[r][c] = m.matrix[r][c];
+      }
+    }
+  }
+
+  void pointAt(Vector4 pos, Vector4 target, Vector4 up) {
+    //calc new Forward vector
+    Vector4 newForward = Vector4.subVector4(target, pos);
+    newForward = Vector4.normalizeVector4(newForward);
+
+    //calc new Up direction
+    Vector4 a =
+        Vector4.multVector4(newForward, Vector4.dotProduct(up, newForward));
+    Vector4 newUp = Vector4.subVector4(up, a);
+    newUp = Vector4.normalizeVector4(newUp);
+
+    //new Right direction
+    Vector4 newRight = Vector4.crossProductVector4(newUp, newForward);
+
+    //construct dimensioning and translation matrix
+    matrix[0][0] = newRight.x;
+    matrix[1][0] = newUp.x;
+    matrix[2][0] = newForward.x;
+    matrix[3][0] = pos.x;
+
+    matrix[0][1] = newRight.y;
+    matrix[1][1] = newUp.y;
+    matrix[2][1] = newForward.y;
+    matrix[3][1] = pos.y;
+
+    matrix[0][2] = newRight.z;
+    matrix[1][2] = newUp.z;
+    matrix[2][2] = newForward.z;
+    matrix[3][2] = pos.z;
+
+    matrix[0][3] = 0.0;
+    matrix[1][3] = 0.0;
+    matrix[2][3] = 0.0;
+    matrix[3][3] = 1.0;
+  }
+
+  //only works for Rotation/Translation Matrices
+  static Matrix quickInvertForRotTrans(Matrix m) {
+    Matrix i = Matrix();
+    i.matrix[0][0] = m.matrix[0][0];
+    i.matrix[0][1] = m.matrix[1][0];
+    i.matrix[0][2] = m.matrix[2][0];
+    i.matrix[0][3] = 0.0;
+
+    i.matrix[1][0] = m.matrix[0][1];
+    i.matrix[1][1] = m.matrix[1][1];
+    i.matrix[1][2] = m.matrix[2][1];
+    i.matrix[1][3] = 0.0;
+
+    i.matrix[2][0] = m.matrix[0][2];
+    i.matrix[2][1] = m.matrix[1][2];
+    i.matrix[2][2] = m.matrix[2][2];
+    i.matrix[2][3] = 0.0;
+
+    i.matrix[3][0] = -(m.matrix[3][0] * i.matrix[0][0] +
+        m.matrix[3][1] * i.matrix[1][0] +
+        m.matrix[3][2] * i.matrix[2][0]);
+    i.matrix[3][1] = -(m.matrix[3][0] * i.matrix[0][1] +
+        m.matrix[3][1] * i.matrix[1][1] +
+        m.matrix[3][2] * i.matrix[2][1]);
+    i.matrix[3][2] = -(m.matrix[3][0] * i.matrix[0][2] +
+        m.matrix[3][1] * i.matrix[1][2] +
+        m.matrix[3][2] * i.matrix[2][2]);
+    i.matrix[3][3] = 1.0;
+
+    return i;
+  }
+}
+
+class Engine3d extends StatefulWidget {
+  const Engine3d({super.key});
+
+  @override
+  State<Engine3d> createState() => _Engine3dState();
+}
+
+class _Engine3dState extends State<Engine3d> {
+  final _redrawNotifier = ValueNotifier<int>(0);
+
+  late double aspectRatio;
+  Mesh mesh = Mesh();
+  Matrix matProj = Matrix();
+  Matrix matTrans = Matrix();
+  Matrix matRotX = Matrix();
+  Matrix matRotY = Matrix();
+  Matrix matRotZ = Matrix();
+  Matrix matWorld = Matrix();
+  Matrix matCamera = Matrix();
+  Matrix matView = Matrix();
+  Matrix matCamRot = Matrix();
+  Vector4 vCamera = Vector4();
+  Vector4 vLookDir = Vector4();
+  double fovDegrees = 90.0;
+  double yaw = 0;
+  double theta = 0;
+
+  void _handleHorizontalDragUpdate(DragUpdateDetails d) {
+    //handle "yaw" horizontal drag gestures
+    //this is effectively the "A" and "D" keys
+    if (d.primaryDelta! > 0) {
+      yaw += d.primaryDelta! / 100;
+    } else {
+      yaw += d.primaryDelta! / 100;
+    }
+    computeMatrices();
+  }
+
+  bool _onKeyDown(KeyEvent event) {
+    if (event is KeyDownEvent) {
+      if (event.physicalKey == PhysicalKeyboardKey.arrowUp) {
+        vCamera.y += 0.25;
+      }
+      if (event.physicalKey == PhysicalKeyboardKey.arrowDown) {
+        vCamera.y -= 0.25;
+      }
+      if (event.physicalKey == PhysicalKeyboardKey.arrowLeft) {
+        vCamera.x += 0.25;
+      }
+      if (event.physicalKey == PhysicalKeyboardKey.arrowRight) {
+        vCamera.x -= 0.25;
+      }
+      if (event.physicalKey == PhysicalKeyboardKey.keyW) {
+        Vector4 vForward = Vector4.multVector4(vLookDir, 0.25);
+        Vector4 v = Vector4.addVector4(vCamera, vForward);
+        vCamera.copyVectorData(v);
+      }
+      if (event.physicalKey == PhysicalKeyboardKey.keyS) {
+        Vector4 vForward = Vector4.multVector4(vLookDir, 0.25);
+        Vector4 v = Vector4.subVector4(vCamera, vForward);
+        vCamera.copyVectorData(v);
+      }
+      computeMatrices();
+    }
+    return true;
+  }
+
+  computeMatrices() {
+    matRotZ.makeRotationMatrixZ(theta * .5);
+    matRotX.makeRotationMatrixX(theta);
+    matTrans.makeTranslationMatrix(-10.0, -10, 10.0);
+
+    matWorld.makeIdentity();
+    matWorld.multiplyMatrix(matRotZ, matRotX);
+    matWorld.multiplyMatrix(matWorld, matTrans);
+
+    Vector4 vUp = Vector4(x: 0, y: 1, z: 0);
+    Vector4 vTarget = Vector4(x: 0, y: 0, z: 1);
+    matCamRot.makeRotationMatrixY(yaw);
+    vLookDir = Vector4.multiplyMatrixVector(matCamRot, vTarget);
+    vTarget = Vector4.addVector4(vCamera, vLookDir);
+    matCamera.pointAt(vCamera, vTarget, vUp);
+
+    //Invert
+    Matrix temp = Matrix.quickInvertForRotTrans(matCamera);
+    matView.applyMatrixValues(temp);
+
+    _redrawNotifier.value++;
+  }
+
+  @override
+  void initState() {
+    ServicesBinding.instance.keyboard.addHandler(_onKeyDown);
+      
+    mesh.loadFromFileObj('mountains.obj').then((bool value) {
+      computeMatrices();
+    });
+
+    super.initState();
+  }
+
+  @override
+  void dispose() {
+    ServicesBinding.instance.keyboard.removeHandler(_onKeyDown);
+
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Size screenSize = Size(
+        MediaQuery.of(context).size.width, MediaQuery.of(context).size.height);
+    aspectRatio =
+        MediaQuery.of(context).size.height / MediaQuery.of(context).size.width;
+
+    matProj.makeProjectionMatrix(fovDegrees, aspectRatio, 0.1, 1000.0);
+
+    return SafeArea(
+      child: GestureDetector(
+        onHorizontalDragUpdate: _handleHorizontalDragUpdate,
+        child: CustomPaint(
+          size: screenSize,
+          painter: MyPainter(
+              mesh: mesh,
+              matProj: matProj,
+              matWorld: matWorld,
+              matView: matView,
+              vCamera: vCamera,
+              repaint: _redrawNotifier),
+        ),
+      ),
+    );
+  }
+}
+
+class MyPainter extends CustomPainter {
+  MyPainter(
+      {required this.mesh,
+      required this.matProj,
+      required this.matWorld,
+      required this.matView,
+      required this.vCamera,
+      required this.repaint})
+      : super(repaint: repaint);
+
+  ValueNotifier<int> repaint;
+  Vector4 vCamera;
+  Mesh mesh;
+  Matrix matProj;
+  Matrix matView;
+  Matrix matWorld;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    print('paint');
+    List<Triangle> trisToRaster = [];
+
+    for (var tri in mesh.tris) {
+      Triangle triTransformed =
+          Triangle(points: [Vector4(), Vector4(), Vector4()]);
+      Triangle triViewed = Triangle(points: [Vector4(), Vector4(), Vector4()]);
+      Triangle triProjected =
+          Triangle(points: [Vector4(), Vector4(), Vector4()]);
+
+      //transform the triangle by world matrice
+      triTransformed.points[0] =
+          Vector4.multiplyMatrixVector(matWorld, tri.points[0]);
+      triTransformed.points[1] =
+          Vector4.multiplyMatrixVector(matWorld, tri.points[1]);
+      triTransformed.points[2] =
+          Vector4.multiplyMatrixVector(matWorld, tri.points[2]);
+
+      //use cross-product to get the surface normal
+      Vector4 normal = Vector4();
+      Vector4 line1 = Vector4.subVector4(
+          triTransformed.points[1], triTransformed.points[0]);
+      Vector4 line2 = Vector4.subVector4(
+          triTransformed.points[2], triTransformed.points[0]);
+
+      //take the cross-product of the lines to get the surface normal
+      normal = Vector4.crossProductVector4(line1, line2);
+
+      //normalize the normal
+      normal = Vector4.normalizeVector4(normal);
+
+      //get ray from triangle to camera
+      Vector4 vCameraRay =
+          Vector4.subVector4(triTransformed.points[0], vCamera);
+
+      //if the tri is facing us (neg normal value) then prepare to draw it
+      if (Vector4.dotProduct(normal, vCameraRay) < 0.0) {
+        //Illumination
+        Vector4 lightDirection = Vector4(x: 0, y: 1, z: -1);
+
+        //normalize illumination vec
+        lightDirection = Vector4.normalizeVector4(lightDirection);
+
+        double dp = max(0.1, Vector4.dotProduct(lightDirection, normal));
+
+        triTransformed.computeShading(dp);
+
+        //convert world space --> view space
+        triViewed.points[0] =
+            Vector4.multiplyMatrixVector(matView, triTransformed.points[0]);
+        triViewed.points[1] =
+            Vector4.multiplyMatrixVector(matView, triTransformed.points[1]);
+        triViewed.points[2] =
+            Vector4.multiplyMatrixVector(matView, triTransformed.points[2]);
+
+        //depth clipping
+        int clippedTriCount = 0;
+        List clipped = [];
+        Map<String, dynamic> result = triViewed.triClipAgainstPlane(
+            Vector4(x: 0, y: 0, z: 0.1), Vector4(x: 0, y: 0, z: 1), triViewed);
+        clippedTriCount = result['count'];
+        if (clippedTriCount > 0) {
+          clipped.add(result['t1']);
+        }
+        if (clippedTriCount > 1) {
+          clipped.add(result['t2']);
+        }
+
+        for (int n = 0; n < clippedTriCount; n++) {
+          //project the triangle from 3D --> 2D
+          triProjected.points[0] =
+              Vector4.multiplyMatrixVector(matProj, clipped[n].points[0]);
+          triProjected.points[1] =
+              Vector4.multiplyMatrixVector(matProj, clipped[n].points[1]);
+          triProjected.points[2] =
+              Vector4.multiplyMatrixVector(matProj, clipped[n].points[2]);
+
+          // Scale into view, normalizing
+          triProjected.points[0] = Vector4.divVector4(
+              triProjected.points[0], triProjected.points[0].w);
+          triProjected.points[1] = Vector4.divVector4(
+              triProjected.points[1], triProjected.points[1].w);
+          triProjected.points[2] = Vector4.divVector4(
+              triProjected.points[2], triProjected.points[2].w);
+
+          // Scale into view
+          Vector4 offsetView = Vector4(x: 1, y: 1, z: 0);
+          triProjected.points[0] =
+              Vector4.addVector4(triProjected.points[0], offsetView);
+          triProjected.points[1] =
+              Vector4.addVector4(triProjected.points[1], offsetView);
+          triProjected.points[2] =
+              Vector4.addVector4(triProjected.points[2], offsetView);
+          triProjected.points[0].x *= 0.5 * size.width;
+          triProjected.points[0].y *= 0.5 * size.height;
+          triProjected.points[1].x *= 0.5 * size.width;
+          triProjected.points[1].y *= 0.5 * size.height;
+          triProjected.points[2].x *= 0.5 * size.width;
+          triProjected.points[2].y *= 0.5 * size.height;
+
+          //copy color info from triTransformed to triProjected for encapsulation
+          triProjected.color = triTransformed.color;
+
+          //store tri for painters algo (draw from back to front z-depth)
+          trisToRaster.add(triProjected);
+        }
+      }
+    }
+
+    //sort tris for painters algo (draw from back to front z-depth)
+    trisToRaster.sort((a, b) {
+      double z1 = (a.points[0].z + a.points[1].z + a.points[2].z) / 3;
+      double z2 = (b.points[0].z + b.points[1].z + b.points[2].z) / 3;
+      return z1 > z2 ? 1 : -1;
+    });
+
+    //Screen edge clipping
+    for (var tri in trisToRaster) {
+      List<Triangle> clipped = [];
+      List<Triangle> listTris = [];
+
+      //add initial triangle
+      listTris.add(tri);
+      int newTriCount = 1;
+
+      for (int i = 0; i < 4; i++) {
+        int trisToAddCount = 0;
+        while (newTriCount > 0) {
+          // Take triangle from front of queue
+          Triangle test = listTris.removeAt(0);
+          newTriCount--;
+
+          // Clip it against a plane. We only need to test each
+          // subsequent plane, against subsequent new triangles
+          // as all triangles after a plane clip are guaranteed
+          // to lie on the inside of the plane.
+          Map<String, dynamic> res = {};
+          switch (i) {
+            case 0:
+              res = test.triClipAgainstPlane(
+                  Vector4(x: 0, y: 0, z: 0), Vector4(x: 0, y: 1, z: 0), test);
+              break;
+            case 1:
+              res = test.triClipAgainstPlane(
+                  Vector4(x: 0, y: size.height - 1, z: 0),
+                  Vector4(x: 0, y: -1, z: 0),
+                  test);
+              break;
+            case 2:
+              res = test.triClipAgainstPlane(
+                  Vector4(x: 0, y: 0, z: 0), Vector4(x: 1, y: 0, z: 0), test);
+              break;
+            case 3:
+              res = test.triClipAgainstPlane(
+                  Vector4(x: size.width - 1, y: 0, z: 0),
+                  Vector4(x: -1, y: 0, z: 0),
+                  test);
+              break;
+          }
+
+          trisToAddCount = res['count'];
+          if (trisToAddCount > 0) {
+            clipped.add(res['t1']);
+          }
+          if (res.length > 1) {
+            clipped.add(res['t2']);
+          }
+
+          // Clipping may yield a variable number of triangles, so
+          // add these new ones to the back of the queue for subsequent
+          // clipping against next planes
+          listTris.addAll(clipped);
+          clipped = [];
+        }
+        newTriCount = listTris.length;
+      }
+
+      //Raster triangles
+      for (Triangle tri in listTris) {
+        final path = Path();
+        // need to initially move the start of the path to the tri starting point otherwise flutter defaults to 0,0
+        path.moveTo(tri.points[0].x, tri.points[0].y);
+        path.lineTo(tri.points[0].x, tri.points[0].y);
+        path.lineTo(tri.points[1].x, tri.points[1].y);
+        path.lineTo(tri.points[2].x, tri.points[2].y);
+        path.close();
+
+        final paintFill = Paint()
+          ..style = PaintingStyle.fill
+          ..color = tri.color.toColor()
+          //antialiasing causes lines to form between triangles, best to have it off
+          ..isAntiAlias = false
+          ..strokeWidth = 0;
+
+        final paintEdges = Paint()
+          ..style = PaintingStyle.stroke
+          ..color = Colors.grey
+          //antialiasing causes lines to form between triangles, best to have it off
+          ..isAntiAlias = false
+          ..strokeWidth = 1;
+
+        canvas.drawPath(path, paintEdges);
+        canvas.drawPath(path, paintFill);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) {
+    return false;
+  }
+}
