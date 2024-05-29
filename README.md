@@ -23,4 +23,4 @@ Depending on your individual keyboard key presses may need to be made repetedly 
 
 ## Notes
 
-Current implementation is designed to only re-compute projections and rasterization when the camera moves. If and object were to be made to move in the scene the current implementation would not re-render that change.
+Current implementation is designed to only re-compute projections and rasterization when the camera moves. If an object were to be made to move in the scene the current implementation would not re-render that change.
